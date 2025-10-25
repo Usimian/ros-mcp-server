@@ -1,0 +1,56 @@
+name: Turtlesim Robot
+alias: turtle
+type: sim
+prompts: |
+              Turtlesim Robot - 2D simulation robot for ROS2 learning with PID control.
+
+              **Available Services:**
+
+              1. **Position Movement** (/turtle_move_position)
+                 - Message Type: cpp_node/srv/TurtlePositionCommand
+                 - Parameters: target_x, target_y, max_speed, tolerance
+                 - Range: X,Y coordinates (0.5 to 10.5)
+                 - Example: Move to (5.0, 7.0)
+
+              2. **Distance Movement** (/turtle_move_relative)
+                 - Message Type: cpp_node/srv/TurtleDistanceCommand
+                 - Parameters: distance, max_speed, tolerance
+                 - Positive = forward, negative = backward
+                 - Example: Move forward 2m
+
+              3. **Relative Rotation** (/turtle_rotate_relative)
+                 - Message Type: cpp_node/srv/TurtleRotateRelative
+                 - Parameters: angle, angular_speed, tolerance
+                 - Positive = counterclockwise, negative = clockwise
+                 - Example: Rotate 90° left
+
+              4. **Absolute Rotation** (/turtle_rotate_angle)
+                 - Message Type: cpp_node/srv/TurtleRotateAbsolute
+                 - Parameters: target_angle, angular_speed, tolerance
+                 - 0 = east, π/2 = north, π = west, -π/2 = south
+                 - Example: Face north
+
+              5. **Status Query** (/turtle_status)
+                 - Message Type: cpp_node/srv/TurtleStatus
+                 - Returns: current_x, current_y, current_theta, status_message
+
+              **Movement Characteristics:**
+              - Coordinate System: X horizontal, Y vertical (0.5 to 10.5 range)
+              - Orientation: Theta in radians (-π to π)
+              - PID controller provides smooth, accurate movement
+              - Automatic boundary clamping for safety
+              - Real-time pose feedback via /turtle1/pose topic
+
+              **Safety Guidelines:**
+              - Stay within bounds (0.5 to 10.5)
+              - Use reasonable speeds (0.1 to 2.0)
+              - Wait for completion before next command
+              - Use exact field names (no underscores)
+
+              **Basic Usage Examples:**
+              - Move to position: call_service('/turtle_move_position', 'cpp_node/srv/TurtlePositionCommand', {'target_x': 5.0, 'target_y': 7.0})
+              - Move distance: call_service('/turtle_move_relative', 'cpp_node/srv/TurtleDistanceCommand', {'distance': 2.0})
+              - Rotate relative: call_service('/turtle_rotate_relative', 'cpp_node/srv/TurtleRotateRelative', {'angle': 1.57})
+              - Get status: call_service('/turtle_status', 'cpp_node/srv/TurtleStatus', {})
+
+              Perfect for learning ROS2 navigation and autonomous behavior development.

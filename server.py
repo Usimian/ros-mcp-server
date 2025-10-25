@@ -12,6 +12,39 @@ from utils.config_utils import get_robot_specifications, parse_robot_config
 from utils.network_utils import ping_ip_and_port
 from utils.websocket_manager import WebSocketManager, parse_image, parse_json
 
+
+def safe_response_handler(response: Any, context: str = "operation") -> dict:
+    """
+    Safely handle WebSocket responses that might be strings or dicts.
+    
+    Args:
+        response: The response from WebSocket manager (could be dict, string, or None)
+        context: Description of the operation for error messages
+        
+    Returns:
+        dict: Standardized response with error handling
+    """
+    # Handle None response
+    if response is None:
+        return {"error": f"{context}: No response received"}
+    
+    # Handle error responses from WebSocket manager
+    if isinstance(response, dict) and "error" in response:
+        return {
+            "error": f"{context}: WebSocket error - {response['error']}",
+            "raw_response": response.get("raw", "No raw response available")
+        }
+    
+    # Handle non-dict responses (strings, etc.)
+    if not isinstance(response, dict):
+        return {
+            "error": f"{context}: Invalid response type - expected dict, got {type(response).__name__}",
+            "raw_response": str(response)
+        }
+    
+    # Return the valid dict response
+    return response
+
 # ROS bridge connection settings
 ROSBRIDGE_IP = "127.0.0.1"  # Default is localhost. Replace with your local IPor set using the LLM.
 ROSBRIDGE_PORT = (
@@ -131,7 +164,14 @@ def get_topics() -> dict:
 
     # Request topic list from rosbridge
     with ws_manager:
-        response = ws_manager.request(message)
+        raw_response = ws_manager.request(message)
+
+    # Safely handle the response
+    response = safe_response_handler(raw_response, "Get topics")
+    
+    # If the helper detected an error, return it
+    if "error" in response and len(response) <= 2:  # Only error and possibly raw_response
+        return response
 
     # Check for service response errors first
     if response and "result" in response and not response["result"]:
@@ -771,18 +811,33 @@ def get_services() -> dict:
 
     # Request service list from rosbridge
     with ws_manager:
-        response = ws_manager.request(message)
+        raw_response = ws_manager.request(message)
+    
+    # Safely handle the response
+    response = safe_response_handler(raw_response, "Get services")
+    
+    # Check for errors from safe handler
+    if "error" in response:
+        return response
 
     # Check for service response errors first
-    if response and "result" in response and not response["result"]:
+    if response and isinstance(response, dict) and "result" in response and not response["result"]:
         # Service call failed - return error with details from values
-        error_msg = response.get("values", {}).get("message", "Service call failed")
+        values = response.get("values", {})
+        if isinstance(values, dict):
+            error_msg = values.get("message", "Service call failed")
+        else:
+            error_msg = str(values) if values else "Service call failed"
         return {"error": f"Service call failed: {error_msg}"}
 
     # Return service info if present
-    if response and "values" in response:
-        services = response["values"].get("services", [])
-        return {"services": services, "service_count": len(services)}
+    if response and isinstance(response, dict) and "values" in response:
+        values = response["values"]
+        if isinstance(values, dict):
+            services = values.get("services", [])
+            return {"services": services, "service_count": len(services)}
+        else:
+            return {"error": f"Invalid values format: {type(values).__name__}"}
     else:
         return {"warning": "No services found"}
 
@@ -818,21 +873,36 @@ def get_service_type(service: str) -> dict:
 
     # Request service type from rosbridge
     with ws_manager:
-        response = ws_manager.request(message)
+        raw_response = ws_manager.request(message)
+    
+    # Safely handle the response
+    response = safe_response_handler(raw_response, f"Get service type for {service}")
+    
+    # Check for errors from safe handler
+    if "error" in response:
+        return response
 
     # Check for service response errors first
-    if response and "result" in response and not response["result"]:
+    if response and isinstance(response, dict) and "result" in response and not response["result"]:
         # Service call failed - return error with details from values
-        error_msg = response.get("values", {}).get("message", "Service call failed")
+        values = response.get("values", {})
+        if isinstance(values, dict):
+            error_msg = values.get("message", "Service call failed")
+        else:
+            error_msg = str(values) if values else "Service call failed"
         return {"error": f"Service call failed: {error_msg}"}
 
     # Return service type if present
-    if response and "values" in response:
-        service_type = response["values"].get("type", "")
-        if service_type:
-            return {"service": service, "type": service_type}
+    if response and isinstance(response, dict) and "values" in response:
+        values = response["values"]
+        if isinstance(values, dict):
+            service_type = values.get("type", "")
+            if service_type:
+                return {"service": service, "type": service_type}
+            else:
+                return {"error": f"Service {service} does not exist or has no type"}
         else:
-            return {"error": f"Service {service} does not exist or has no type"}
+            return {"error": f"Invalid values format: {type(values).__name__}"}
     else:
         return {"error": f"Failed to get type for service {service}"}
 
@@ -1044,7 +1114,7 @@ def inspect_all_services() -> dict:
     )
 )
 def call_service(
-    service_name: str, service_type: str, request: dict, timeout: Optional[float] = None
+    service_name: str, service_type: str, request: Union[dict, str], timeout: Optional[float] = None
 ) -> dict:
     """
     Call a ROS service with specified request data.
@@ -1052,12 +1122,33 @@ def call_service(
     Args:
         service_name (str): The service name (e.g., '/rosapi/topics')
         service_type (str): The service type (e.g., 'rosapi/Topics')
-        request (dict): Service request data as a dictionary
+        request (Union[dict, str]): Service request data as a dictionary or JSON string
         timeout (Optional[float]): Timeout in seconds. If None, uses the default timeout.
 
     Returns:
         dict: Contains the service response or error information.
     """
+    # Handle case where request is a JSON string (LLM sending wrong format)
+    if isinstance(request, str):
+        try:
+            request = json.loads(request)
+        except json.JSONDecodeError as e:
+            return {
+                "service": service_name,
+                "service_type": service_type,
+                "success": False,
+                "error": f"Invalid JSON string in request parameter: {request}. Parse error: {e}",
+            }
+    
+    # Ensure request is a dictionary at this point
+    if not isinstance(request, dict):
+        return {
+            "service": service_name,
+            "service_type": service_type,
+            "success": False,
+            "error": f"Request parameter must be a dict or JSON string, got {type(request).__name__}: {request}",
+        }
+
     # rosbridge service call
     message = {
         "op": "call_service",
@@ -1069,12 +1160,29 @@ def call_service(
 
     # Call the service through rosbridge
     with ws_manager:
-        response = ws_manager.request(message, timeout=timeout)
+        raw_response = ws_manager.request(message, timeout=timeout)
+    
+    # Safely handle the response
+    response = safe_response_handler(raw_response, f"Service call to {service_name}")
+    
+    # If the helper detected an error, return it with service context
+    if "error" in response and len(response) <= 2:  # Only error and possibly raw_response
+        return {
+            "service": service_name,
+            "service_type": service_type,
+            "success": False,
+            "error": response["error"],
+            "raw_response": response.get("raw_response", "No raw response available")
+        }
 
     # Check for service response errors first
-    if response and "result" in response and not response["result"]:
+    if response and isinstance(response, dict) and "result" in response and not response["result"]:
         # Service call failed - return error with details from values
-        error_msg = response.get("values", {}).get("message", "Service call failed")
+        values = response.get("values", {})
+        if isinstance(values, dict):
+            error_msg = values.get("message", "Service call failed")
+        else:
+            error_msg = str(values) if values else "Service call failed"
         return {
             "service": service_name,
             "service_type": service_type,
@@ -1083,7 +1191,7 @@ def call_service(
         }
 
     # Return service response if present
-    if response:
+    if response and isinstance(response, dict):
         if response.get("op") == "service_response":
             # Alternative response format
             return {
